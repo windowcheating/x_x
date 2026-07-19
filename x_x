@@ -1374,7 +1374,7 @@
         function Library:Window(properties)
             local Cfg = {
                 Name = properties.Name or "nebula";
-                Size = properties.Size or dim2(0, 500, 0, 360);
+                Size = properties.Size or dim2(0, 500, 0, 380);
                 TabInfo;
                 Items = {};
             }
