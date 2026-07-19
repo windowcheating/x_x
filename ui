@@ -1363,8 +1363,8 @@
         function Library:Window(properties)
             local Cfg = {
                 Name = properties.Name or "Reformation.gg";
-                -- MODIFIED: More compact square size
-                Size = properties.Size or dim2(0, 460, 0, 400);
+                -- MODIFIED: Made the window more square/compact like the reference image
+                Size = properties.Size or dim2(0, 500, 0, 420);
                 TabInfo;
                 Items = {};
             }
@@ -4742,7 +4742,7 @@
 
             local Tab = window:Tab({Name = "Config"})
 
-            local Section = Tab:Section({Name = "Main", Side = "Left", Size = 215})
+            local Section = Tab:Section({Name = "Main", Side = "Left"})
             ConfigHolder = Section:Dropdown({Name = "Config List", Options = {"Report", "This", "Error", "To", "Finobe"}, Callback = function(option) if Text then Text.Set(option) end end, Flag = "config_Name_list"}); Library:UpdateConfigList()
             window.Tweening = true
             Text = Section:Textbox({Name = "Config Name", Flag = "config_Name_text", Callback = function(text)
@@ -4775,35 +4775,41 @@
                 window.ToggleMenu(bool) 
             end, Default = true})
 
-            local Section2 = Tab:Section({Name = "Menu", Side = "Left", Size = 215})
-            Section2:Toggle({Name = "Watermark", Flag = "Watermark", Callback = window.ToggleWatermark})
-            Section2:Toggle({Name = "Keybind List", Flag = "KeybindList", Callback = window.ToggleKeybindList})
-            Section2:Toggle({Name = "Toggle Status", Flag = "Status", Callback = window.ToggleStatus})
-            Section2:Textbox({Name = "Custom Menu Name", Callback = window.ChangeTitle, Default = window.Name, Placeholder = "Title name here..."})
-            Section2:Textbox({Name = "Custom Watermark Name", Callback = window.ChangeWatermarkTitle, Default = window.Name, Placeholder = "Title name here..."})
-            Section2:Dropdown({Name = "Tweening Style", Options = {"Linear", "Sine", "Back", "Quad", "Quart", "Quint", "Bounce", "Elastic", "Exponential", "Circular", "Cubic"}, Flag = "LibraryEasingStyle", Default = "Quint", Callback = function(Option)
-                Library.EasingStyle = Enum.EasingStyle[Option]
-            end});
-            Section2:Slider({Name = "Tweening Speed", Min = 0, Max = 10, Decimal = 0.01, Suffix = "s", Default = 0.25, Flag = "TweeningSpeed", Callback = function(int)
-                Library.TweeningSpeed = int
-            end})
-
-            local Section3 = Tab:Section({Name = "Extra", Side = "Right", Size = 215})
-            Section3:Button({Name = "Copy Join Script", Callback = function()
+            local Section2 = Tab:Section({Name = "Extra", Side = "Right"})
+            Section2:Button({Name = "Copy Join Script", Callback = function()
                 setclipboard('game:GetService("TeleportService"):Teleport(game.PlaceId, game:GetService("Players").LocalPlayer)')
                 Notifications:Create({Name = "Copied Join Script"})
             end})
-            Section3:Button({Name = "Copy Job ID", Callback = function()
+            Section2:Button({Name = "Copy Job ID", Callback = function()
                 setclipboard(game.JobId)
                 Notifications:Create({Name = "Copied Job ID: " .. game.JobId})
             end})
-            Section3:Button({Name = "Join Server", Callback = function()
+            Section2:Label({Name = "Server Job ID"}):Textbox({Name = "", Default = game.JobId, Callback = function() end})
+            Section2:Button({Name = "Join Server", Callback = function()
                 game:GetService("TeleportService"):Teleport(game.PlaceId, game:GetService("Players").LocalPlayer)
             end})
-            Section3:Label({Name = "Server Job ID"})
-            Section3:Textbox({Name = "", Default = game.JobId, Callback = function() end})
 
-            local Section4 = Tab:Section({Name = "", Side = "Right", Size = 215})
+            local Section3 = Tab:Section({Name = "Menu", Side = "Left"})
+            Section3:Toggle({Name = "Watermark", Flag = "Watermark", Callback = window.ToggleWatermark})
+            Section3:Toggle({Name = "Keybind List", Flag = "KeybindList", Callback = window.ToggleKeybindList})
+            Section3:Toggle({Name = "Toggle Status", Flag = "Status", Callback = window.ToggleStatus})
+            Section3:Textbox({Name = "Custom Menu Name", Callback = window.ChangeTitle, Default = window.Name, Placeholder = "Title name here..."})
+            Section3:Textbox({Name = "Custom Watermark Name", Callback = window.ChangeWatermarkTitle, Default = window.Name, Placeholder = "Title name here..."})
+            Section3:Dropdown({Name = "Tweening Style", Options = {"Linear", "Sine", "Back", "Quad", "Quart", "Quint", "Bounce", "Elastic", "Exponential", "Circular", "Cubic"}, Flag = "LibraryEasingStyle", Default = "Quint", Callback = function(Option)
+                Library.EasingStyle = Enum.EasingStyle[Option]
+            end});
+            Section3:Slider({Name = "Tweening Speed", Min = 0, Max = 10, Decimal = 0.01, Suffix = "s", Default = 0.25, Flag = "TweeningSpeed", Callback = function(int)
+                Library.TweeningSpeed = int
+            end})
+            Section3:Label({Name = "Menu Bind"}):Keybind({Name = "Menu Bind", ShowInList = false, Callback = function(bool) 
+                if window.Tweening then
+                    return 
+                end 
+
+                window.ToggleMenu(bool) 
+            end, Default = true})
+
+            local Section4 = Tab:Section({Name = "", Side = "Right"})
             Section4:Label({Name = "Inline"}):Colorpicker({Flag = "Inline", Callback = function(color, alpha) 
                 Library:RefreshTheme("inline", color) 
 
@@ -5005,22 +5011,25 @@
 -- Example usage - Create the UI with the compact/square size
 local Window = Library:Window({
     Name = "Reformation.gg",
-    Size = dim2(0, 460, 0, 400)
+    -- This makes it more square/compact like the reference image
+    Size = dim2(0, 500, 0, 420)
 })
 
 -- Add tabs
 local Combat = Window:Tab({Name = "Combat"})
+local World = Window:Tab({Name = "World"})
 local Visuals = Window:Tab({Name = "Visuals"})
+local Misc = Window:Tab({Name = "Misc"})
 local Players = Window:Tab({Name = "Players"})
-local Config = Window:Tab({Name = "Config"})
+local Settings = Window:Tab({Name = "Settings"})
 
 -- Add sections to tabs (example)
-local CombatSection = Combat:Section({Name = "Combat", Side = "Left", Size = 215})
+local CombatSection = Combat:Section({Name = "Combat", Side = "Left"})
 CombatSection:Toggle({Name = "Enable Combat", Default = true})
 CombatSection:Slider({Name = "Range", Min = 0, Max = 100, Default = 50})
 
-local VisualsSection = Visuals:Section({Name = "Visuals", Side = "Left", Size = 215})
-VisualsSection:Toggle({Name = "ESP", Default = false})
+local WorldSection = World:Section({Name = "World", Side = "Left"})
+WorldSection:Toggle({Name = "ESP", Default = false})
 
 -- Configs tab
 Library:Configs(Window)
