@@ -1362,7 +1362,7 @@
     -- Library element functions
         function Library:Window(properties)
             local Cfg = {
-                Name = properties.Name or "Reformation.gg";
+                Name = properties.Name or " x_x  @inasterency  ";
                 -- MODIFIED: Made the window more square/compact like the reference image
                 Size = properties.Size or dim2(0, 500, 0, 420);
                 TabInfo;
@@ -5010,7 +5010,7 @@
 
 -- Example usage - Create the UI with the compact/square size
 local Window = Library:Window({
-    Name = "Reformation.gg",
+    Name = " x_x  @inasterency  ",
     -- This makes it more square/compact like the reference image
     Size = dim2(0, 500, 0, 420)
 })
