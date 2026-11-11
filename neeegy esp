@@ -1,0 +1,1000 @@
+-- allesp.lua — Highlight + Dropped Gun ESP + Trap ESP + Footstep Trails (Round-Refreshable)
+local API = {}
+
+--==============================================================
+-- Shared colors
+--==============================================================
+local C = {
+    Innocent = Color3.fromHex("#B1FFB1"),
+    Murderer = Color3.fromHex("#FF7272"),
+    Sheriff  = Color3.fromHex("#ACD7FF"),
+    Trap     = Color3.fromHex("#A855F7"),
+}
+
+local function getAccentColor()
+    local lib = getgenv().Library
+    local theme = lib and lib.Theme
+    if theme and theme.Accent then
+        if typeof(theme.Accent) == "ColorSequence" then
+            return theme.Accent.Keypoints[1].Value
+        elseif typeof(theme.Accent) == "Color3" then
+            return theme.Accent
+        end
+    end
+    return Color3.fromRGB(255, 255, 255)
+end
+
+--==============================================================
+-- Shared role fetch
+--==============================================================
+local roleCache = {}
+
+local function fetchRoles()
+    local remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+    local extras = remotes and remotes:FindFirstChild("Extras")
+    local getPlayerData = extras and extras:FindFirstChild("GetPlayerData")
+    if not getPlayerData then return end
+    local ok, data = pcall(function() return getPlayerData:InvokeServer() end)
+    if ok and type(data) == "table" then
+        -- Clear old cache to prevent stuck roles
+        table.clear(roleCache)
+        for name, info in pairs(data) do
+            if type(info) == "table" and info.Role then
+                roleCache[name] = info.Role
+            end
+        end
+    end
+end
+
+local function getMurderer()
+    for name, role in pairs(roleCache) do
+        if role == "Murderer" then
+            local p = game.Players:FindFirstChild(name)
+            if p then return p end
+        end
+    end
+    for _, p in ipairs(game.Players:GetPlayers()) do
+        local bp = p:FindFirstChildOfClass("Backpack")
+        if bp and bp:FindFirstChild("Knife") then return p end
+        if p.Character and p.Character:FindFirstChild("Knife") then return p end
+    end
+    return nil
+end
+
+local function getSheriff()
+    for name, role in pairs(roleCache) do
+        if role == "Sheriff" then
+            local p = game.Players:FindFirstChild(name)
+            if p then return p end
+        end
+    end
+    for _, p in ipairs(game.Players:GetPlayers()) do
+        local bp = p:FindFirstChildOfClass("Backpack")
+        if bp and bp:FindFirstChild("Gun") then return p end
+        if p.Character and p.Character:FindFirstChild("Gun") then return p end
+    end
+    return nil
+end
+
+local roleConsumers = 0
+local roleFetchThread = nil
+
+local function acquireRoles()
+    roleConsumers = roleConsumers + 1
+    if roleConsumers == 1 then
+        roleFetchThread = task.spawn(function()
+            while roleConsumers > 0 do
+                fetchRoles()
+                task.wait(1)
+            end
+        end)
+    end
+end
+
+local function releaseRoles()
+    roleConsumers = math.max(0, roleConsumers - 1)
+end
+
+--==============================================================
+-- 1) HIGHLIGHT (Chams)
+--==============================================================
+local HL = {
+    enabled = false,
+    renderConn = nil,
+    playerAddedConn = nil,
+    charConns = {},
+    playerRoles = {},
+    playerCharRefs = {},
+    playerOriginalData = {},
+    playerChamsParts = {},
+    playerHiddenClothes = {},
+}
+
+HL.folder = Instance.new("Folder")
+HL.folder.Name = "ESP_Highlight_Chams"
+HL.folder.Parent = game:GetService("CoreGui")
+
+local function hlClearForPlayer(player)
+    if HL.playerHiddenClothes[player] then
+        for _, obj in pairs(HL.playerHiddenClothes[player]) do
+            pcall(function() if obj and player.Character then obj.Parent = player.Character end end)
+        end
+        HL.playerHiddenClothes[player] = nil
+    end
+    if HL.playerOriginalData[player] then
+        for part, data in pairs(HL.playerOriginalData[player]) do
+            pcall(function()
+                if part and part.Parent then
+                    if data.Material then part.Material = data.Material end
+                    if data.Color then part.Color = data.Color end
+                    if data.Transparency then part.Transparency = data.Transparency end
+                    if data.Texture and part:IsA("MeshPart") then part.TextureID = data.Texture end
+                    if data.MeshId and part:IsA("SpecialMesh") then part.MeshId = data.MeshId end
+                end
+            end)
+        end
+        HL.playerOriginalData[player] = nil
+    end
+    if HL.playerChamsParts[player] then
+        for _, part in pairs(HL.playerChamsParts[player]) do
+            pcall(function() if part and part.Parent then part:Destroy() end end)
+        end
+        HL.playerChamsParts[player] = nil
+    end
+    local hl = HL.folder:FindFirstChild("ChamsHL_" .. player.Name)
+    if hl then hl:Destroy() end
+    local innocentHL = HL.folder:FindFirstChild(player.Name)
+    if innocentHL then innocentHL:Destroy() end
+end
+
+local function hlApply(player, color)
+    local char = player.Character
+    if not char then return end
+    hlClearForPlayer(player)
+    HL.playerOriginalData[player] = {}
+    HL.playerChamsParts[player] = {}
+    HL.playerHiddenClothes[player] = {}
+
+    local hl = Instance.new("Highlight")
+    hl.Name = "ChamsHL_" .. player.Name
+    hl.Adornee = char
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.FillColor = Color3.fromRGB(20, 20, 20)
+    hl.FillTransparency = 0.2
+    hl.OutlineColor = color
+    hl.OutlineTransparency = 0.2
+    hl.Parent = HL.folder
+    table.insert(HL.playerChamsParts[player], hl)
+
+    for _, obj in ipairs(char:GetChildren()) do
+        if obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("ShirtGraphic") then
+            table.insert(HL.playerHiddenClothes[player], obj)
+            obj.Parent = nil
+        end
+    end
+
+    local whitelist = {
+        "Head","Torso","UpperTorso","LowerTorso",
+        "LeftArm","RightArm","LeftLeg","RightLeg",
+        "LeftUpperArm","LeftLowerArm","LeftHand",
+        "RightUpperArm","RightLowerArm","RightHand",
+        "LeftUpperLeg","LeftLowerLeg","LeftFoot",
+        "RightUpperLeg","RightLowerLeg","RightFoot",
+    }
+    local partSet = {}
+    for _, n in ipairs(whitelist) do partSet[n] = true end
+
+    for _, obj in ipairs(char:GetDescendants()) do
+        if obj:IsA("BasePart") and partSet[obj.Name] then
+            HL.playerOriginalData[player][obj] = {
+                Material = obj.Material, Color = obj.Color, Transparency = obj.Transparency,
+                Texture = obj:IsA("MeshPart") and obj.TextureID or nil
+            }
+            obj.Transparency = 1
+            if obj:IsA("MeshPart") then obj.TextureID = "" end
+            local mesh = obj:FindFirstChildOfClass("SpecialMesh")
+            if mesh then
+                if not HL.playerOriginalData[player][mesh] then HL.playerOriginalData[player][mesh] = { MeshId = mesh.MeshId } end
+                mesh.MeshId = ""
+            end
+            local clone = obj:Clone()
+            clone.Name = "NeonCham_" .. obj.Name
+            clone.CanCollide = false
+            clone.CanTouch = false
+            clone.CanQuery = false
+            clone.Massless = true
+            clone.Material = Enum.Material.Neon
+            clone.Color = color
+            clone.Transparency = 0
+            clone.Parent = char
+            if clone:IsA("MeshPart") then clone.TextureID = "" end
+            if clone:FindFirstChildOfClass("SpecialMesh") then clone:FindFirstChildOfClass("SpecialMesh"):Destroy() end
+            for _, d in ipairs(clone:GetDescendants()) do
+                if d:IsA("Decal") or d:IsA("Texture") or d:IsA("JointInstance") or d:IsA("Constraint") or d:IsA("TouchTransmitter") then
+                    d:Destroy()
+                end
+            end
+            local weld = Instance.new("WeldConstraint")
+            weld.Part0 = obj
+            weld.Part1 = clone
+            weld.Parent = clone
+            table.insert(HL.playerChamsParts[player], clone)
+        elseif obj:IsA("Accessory") then
+            local handle = obj:FindFirstChild("Handle")
+            if handle and handle:IsA("BasePart") then
+                HL.playerOriginalData[player][handle] = {
+                    Material = handle.Material, Color = handle.Color, Transparency = handle.Transparency,
+                    Texture = handle:IsA("MeshPart") and handle.TextureID or nil
+                }
+                handle.Transparency = 1
+                if handle:IsA("MeshPart") then handle.TextureID = "" end
+                local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+                if mesh then
+                    if not HL.playerOriginalData[player][mesh] then HL.playerOriginalData[player][mesh] = { MeshId = mesh.MeshId } end
+                    mesh.MeshId = ""
+                end
+                local clone = handle:Clone()
+                clone.Name = "NeonCham_Acc_" .. handle.Name
+                clone.CanCollide = false
+                clone.CanTouch = false
+                clone.CanQuery = false
+                clone.Massless = true
+                clone.Material = Enum.Material.Neon
+                clone.Color = color
+                clone.Transparency = 0
+                clone.Parent = char
+                if clone:IsA("MeshPart") then clone.TextureID = "" end
+                if clone:FindFirstChildOfClass("SpecialMesh") then clone:FindFirstChildOfClass("SpecialMesh"):Destroy() end
+                for _, d in ipairs(clone:GetDescendants()) do
+                    if d:IsA("Decal") or d:IsA("Texture") or d:IsA("JointInstance") or d:IsA("Constraint") or d:IsA("TouchTransmitter") then
+                        d:Destroy()
+                    end
+                end
+                local weld = Instance.new("WeldConstraint")
+                weld.Part0 = handle
+                weld.Part1 = clone
+                weld.Parent = clone
+                table.insert(HL.playerChamsParts[player], clone)
+            end
+        end
+    end
+end
+
+local function hlSetupPlayer(p)
+    if HL.charConns[p] then return end
+    HL.charConns[p] = p.CharacterAdded:Connect(function()
+        task.wait(0.5)
+        HL.playerRoles[p] = nil
+        HL.playerCharRefs[p] = nil
+    end)
+end
+
+local function hlRenderStep()
+    local lp = game.Players.LocalPlayer
+    local murderer = getMurderer()
+    local sheriff = getSheriff()
+
+    for _, p in ipairs(game.Players:GetPlayers()) do
+        if p ~= lp then
+            local char = p.Character
+            if char then
+                if HL.playerCharRefs[p] ~= char then
+                    HL.playerCharRefs[p] = char
+                    HL.playerRoles[p] = nil
+                end
+
+                local role = (p == murderer) and "Murderer" or ((p == sheriff) and "Sheriff" or "Innocent")
+
+                if HL.playerRoles[p] ~= role then
+                    HL.playerRoles[p] = role
+                    if role == "Murderer" then
+                        hlApply(p, C.Murderer)
+                    elseif role == "Sheriff" then
+                        hlApply(p, C.Sheriff)
+                    else
+                        hlClearForPlayer(p)
+                    end
+                end
+
+                if role == "Innocent" then
+                    local hl = HL.folder:FindFirstChild(p.Name)
+                    if not hl then
+                        hl = Instance.new("Highlight")
+                        hl.Name = p.Name
+                        hl.Adornee = char
+                        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                        hl.Parent = HL.folder
+                    else
+                        hl.Adornee = char
+                    end
+                    hl.FillColor = Color3.fromRGB(30, 30, 30)
+                    hl.OutlineColor = C.Innocent
+                    hl.FillTransparency = 0.65
+                    hl.OutlineTransparency = 0.2
+                else
+                    local hl = HL.folder:FindFirstChild(p.Name)
+                    if hl then hl:Destroy() end
+                end
+            else
+                HL.playerRoles[p] = nil
+                HL.playerCharRefs[p] = nil
+            end
+        end
+    end
+end
+
+local function hlEnable()
+    if HL.enabled then return end
+    HL.enabled = true
+    for _, p in ipairs(game.Players:GetPlayers()) do hlSetupPlayer(p) end
+    HL.playerAddedConn = game.Players.PlayerAdded:Connect(hlSetupPlayer)
+    acquireRoles()
+    HL.renderConn = game:GetService("RunService").RenderStepped:Connect(hlRenderStep)
+end
+
+local function hlDisable()
+    if not HL.enabled then return end
+    HL.enabled = false
+    if HL.renderConn then HL.renderConn:Disconnect(); HL.renderConn = nil end
+    if HL.playerAddedConn then HL.playerAddedConn:Disconnect(); HL.playerAddedConn = nil end
+    for _, conn in pairs(HL.charConns) do conn:Disconnect() end
+    table.clear(HL.charConns)
+    releaseRoles()
+    HL.folder:ClearAllChildren()
+    for _, p in ipairs(game.Players:GetPlayers()) do
+        hlClearForPlayer(p)
+        HL.playerRoles[p] = nil
+        HL.playerCharRefs[p] = nil
+    end
+end
+
+--==============================================================
+-- 2) DROPPED GUN ESP
+--==============================================================
+local GE = {
+    enabled = false,
+    renderConn = nil,
+    descendantConn = nil,
+    playerAddedConn = nil,
+    charConns = {},
+    labelStore = {},
+    ownerData = {},
+    recentDeaths = {},
+}
+
+GE.hlFolder = Instance.new("Folder")
+GE.hlFolder.Name = "ESP_Gun_Highlights"
+GE.hlFolder.Parent = game:GetService("CoreGui")
+
+GE.tagFolder = Instance.new("Folder")
+GE.tagFolder.Name = "ESP_Gun_Tags"
+GE.tagFolder.Parent = game:GetService("CoreGui")
+
+local function geRecordDeath(plr)
+    local char = plr.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    GE.recentDeaths[#GE.recentDeaths + 1] = { player = plr, pos = hrp.Position, time = os.clock() }
+    local now = os.clock()
+    for i = #GE.recentDeaths, 1, -1 do
+        if now - GE.recentDeaths[i].time > 20 then
+            table.remove(GE.recentDeaths, i)
+        end
+    end
+end
+
+local function geFindOwner(gunPart)
+    if not gunPart then return nil end
+    local gp = gunPart:IsA("Model") and gunPart:FindFirstChildWhichIsA("BasePart") or (gunPart:IsA("BasePart") and gunPart or nil)
+    if not gp then return nil end
+    local now = os.clock()
+    local best, bestDist = nil, 25
+    for _, d in ipairs(GE.recentDeaths) do
+        if now - d.time <= 20 then
+            local dist = (d.pos - gp.Position).Magnitude
+            if dist < bestDist then bestDist = dist; best = d.player end
+        end
+    end
+    return best
+end
+
+local function geAssignOwner(highlight, bb, gunPart)
+    if GE.ownerData[highlight] then return end
+    local owner = geFindOwner(gunPart)
+    if not owner then return end
+    local data = { player = owner, avatarUrl = nil }
+    GE.ownerData[highlight] = data
+    local nameLbl = bb:FindFirstChild("NameLbl", true)
+    if nameLbl then nameLbl.Text = owner.Name end
+    task.spawn(function()
+        local ok, url = pcall(function()
+            return game.Players:GetUserThumbnailAsync(owner.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+        end)
+        if ok and url and GE.ownerData[highlight] == data then
+            data.avatarUrl = url
+            local av = bb:FindFirstChild("Avatar", true)
+            if av then av.Image = url end
+        end
+    end)
+end
+
+local function geCreateLabel(highlight)
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "GunDropTag"
+    bb.Size = UDim2.fromOffset(170, 42)
+    bb.AlwaysOnTop = true
+    bb.StudsOffset = Vector3.new(0, 2.2, 0)
+    bb.Parent = GE.tagFolder
+
+    local card = Instance.new("Frame")
+    card.Name = "Card"
+    card.Size = UDim2.fromScale(1, 1)
+    card.BackgroundColor3 = Color3.fromRGB(16, 16, 18)
+    card.BackgroundTransparency = 0.2
+    card.BorderSizePixel = 0
+    card.Parent = bb
+
+    local c = Instance.new("UICorner", card); c.CornerRadius = UDim.new(0, 10)
+    local grad = Instance.new("UIGradient", card); grad.Rotation = 90
+    grad.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.04), NumberSequenceKeypoint.new(1, 0.28) })
+
+    local edge = Instance.new("UIStroke", card)
+    edge.Color = getAccentColor(); edge.Thickness = 1; edge.Transparency = 0.75
+    edge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+    local avatar = Instance.new("ImageLabel")
+    avatar.Name = "Avatar"
+    avatar.AnchorPoint = Vector2.new(0, 0.5)
+    avatar.Position = UDim2.new(0, 8, 0.5, 0)
+    avatar.Size = UDim2.fromOffset(22, 22)
+    avatar.BackgroundColor3 = Color3.fromRGB(38, 38, 44)
+    avatar.BackgroundTransparency = 0.25
+    avatar.ScaleType = Enum.ScaleType.Fit
+    avatar.Parent = card
+    local avCorner = Instance.new("UICorner", avatar); avCorner.CornerRadius = UDim.new(0, 6)
+
+    local textHolder = Instance.new("Frame")
+    textHolder.Name = "TextHolder"
+    textHolder.BackgroundTransparency = 1
+    textHolder.Position = UDim2.new(0, 36, 0, 0)
+    textHolder.Size = UDim2.new(1, -104, 1, 0)
+    textHolder.Parent = card
+    local vLayout = Instance.new("UIListLayout", textHolder)
+    vLayout.FillDirection = Enum.FillDirection.Vertical
+    vLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    vLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    vLayout.Padding = UDim.new(0, 1)
+
+    local nameLbl = Instance.new("TextLabel")
+    nameLbl.Name = "NameLbl"; nameLbl.LayoutOrder = 1
+    nameLbl.BackgroundTransparency = 1
+    nameLbl.Size = UDim2.new(1, 0, 0, 14)
+    nameLbl.Font = Enum.Font.GothamBold; nameLbl.TextSize = 12
+    nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+    nameLbl.Text = "Unknown"; nameLbl.TextColor3 = getAccentColor()
+    nameLbl.Parent = textHolder
+
+    local subLbl = Instance.new("TextLabel")
+    subLbl.Name = "SubLbl"; subLbl.LayoutOrder = 2
+    subLbl.BackgroundTransparency = 1
+    subLbl.Size = UDim2.new(1, 0, 0, 12)
+    subLbl.Font = Enum.Font.GothamMedium; subLbl.TextSize = 10
+    subLbl.TextXAlignment = Enum.TextXAlignment.Left
+    subLbl.Text = "GUN DROPPED"
+    subLbl.TextColor3 = Color3.fromRGB(200, 200, 210)
+    subLbl.Parent = textHolder
+
+    local distLbl = Instance.new("TextLabel")
+    distLbl.Name = "DistLbl"
+    distLbl.BackgroundTransparency = 1
+    distLbl.AnchorPoint = Vector2.new(1, 0.5)
+    distLbl.Position = UDim2.new(1, -8, 0.5, 0)
+    distLbl.Size = UDim2.fromOffset(50, 14)
+    distLbl.Font = Enum.Font.Gotham; distLbl.TextSize = 11
+    distLbl.TextXAlignment = Enum.TextXAlignment.Right
+    distLbl.Text = ""; distLbl.TextColor3 = getAccentColor()
+    distLbl.Parent = card
+
+    GE.labelStore[highlight] = bb
+    return bb
+end
+
+local function geAddForGun(gunPart)
+    if not gunPart or not gunPart.Parent then return end
+    for _, hl in ipairs(GE.hlFolder:GetChildren()) do
+        if hl.Adornee == gunPart then return end
+    end
+    local hl = Instance.new("Highlight")
+    hl.Name = "GunHL"
+    hl.Adornee = gunPart
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.FillColor = Color3.fromRGB(30, 30, 30)
+    hl.FillTransparency = 0.65
+    hl.OutlineColor = getAccentColor()
+    hl.OutlineTransparency = 0.2
+    hl.Parent = GE.hlFolder
+    local bb = geCreateLabel(hl)
+    bb.Adornee = gunPart
+    geAssignOwner(hl, bb, gunPart)
+end
+
+local function geScan()
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if d.Name == "GunDrop" and (d:IsA("BasePart") or d:IsA("Model")) then
+            geAddForGun(d)
+        end
+    end
+end
+
+local function geClearAll()
+    GE.hlFolder:ClearAllChildren()
+    for _, bb in pairs(GE.labelStore) do bb:Destroy() end
+    table.clear(GE.labelStore)
+    table.clear(GE.ownerData)
+end
+
+local function geAttachDeath(char, plr)
+    local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
+    if hum then hum.Died:Connect(function() geRecordDeath(plr) end) end
+end
+
+local function geSetupPlayer(p)
+    if GE.charConns[p] then return end
+    GE.charConns[p] = p.CharacterAdded:Connect(function(char)
+        task.wait(0.5)
+        geAttachDeath(char, p)
+    end)
+    if p.Character then geAttachDeath(p.Character, p) end
+end
+
+local function geRenderStep()
+    local lp = game.Players.LocalPlayer
+    local hrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+
+    for _, child in ipairs(GE.hlFolder:GetChildren()) do
+        if child.Name == "GunHL" then
+            local gunPart = child.Adornee
+            if not gunPart or not gunPart.Parent then
+                local bb = GE.labelStore[child]
+                if bb then bb:Destroy() end
+                GE.labelStore[child] = nil
+                GE.ownerData[child] = nil
+                child:Destroy()
+            else
+                local bb = GE.labelStore[child]
+                if not bb then bb = geCreateLabel(child) end
+                bb.Adornee = gunPart
+                if not GE.ownerData[child] then geAssignOwner(child, bb, gunPart) end
+                if hrp then
+                    local dist
+                    if gunPart:IsA("Model") then
+                        local pp = gunPart:FindFirstChildWhichIsA("BasePart")
+                        if pp then dist = math.floor((hrp.Position - pp.Position).Magnitude) end
+                    else
+                        dist = math.floor((hrp.Position - gunPart.Position).Magnitude)
+                    end
+                    if dist then
+                        local dLbl = bb:FindFirstChild("DistLbl", true)
+                        if dLbl then dLbl.Text = dist .. "m" end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function geEnable()
+    if GE.enabled then return end
+    GE.enabled = true
+    for _, p in ipairs(game.Players:GetPlayers()) do geSetupPlayer(p) end
+    GE.playerAddedConn = game.Players.PlayerAdded:Connect(geSetupPlayer)
+    GE.descendantConn = workspace.DescendantAdded:Connect(function(d)
+        if d.Name == "GunDrop" and (d:IsA("BasePart") or d:IsA("Model")) then geAddForGun(d) end
+    end)
+    geScan()
+    GE.renderConn = game:GetService("RunService").RenderStepped:Connect(geRenderStep)
+end
+
+local function geDisable()
+    if not GE.enabled then return end
+    GE.enabled = false
+    if GE.renderConn then GE.renderConn:Disconnect(); GE.renderConn = nil end
+    if GE.descendantConn then GE.descendantConn:Disconnect(); GE.descendantConn = nil end
+    if GE.playerAddedConn then GE.playerAddedConn:Disconnect(); GE.playerAddedConn = nil end
+    for _, conn in pairs(GE.charConns) do conn:Disconnect() end
+    table.clear(GE.charConns)
+    geClearAll()
+    table.clear(GE.recentDeaths)
+end
+
+--==============================================================
+-- 3) TRAP ESP (BoxHandleAdornment to avoid circular artifacts)
+--==============================================================
+local TE = { enabled = false, descendantConn = nil }
+TE.folder = Instance.new("Folder")
+TE.folder.Name = "ESP_Trap_Adornments"
+TE.folder.Parent = game:GetService("CoreGui")
+
+local function teIsTrap(obj)
+    if obj.Name ~= "Trap" then return false end
+    local parent = obj.Parent
+    if not parent then return false end
+    if not (parent:IsA("Folder") or parent:IsA("Model")) then return false end
+    return obj:IsA("BasePart") or obj:IsA("Model")
+end
+
+local function teAdd(trap)
+    if not trap or not trap.Parent then return end
+    for _, ad in ipairs(TE.folder:GetChildren()) do
+        if ad.Adornee == trap then return end
+    end
+
+    local box = Instance.new("BoxHandleAdornment")
+    box.Name = "TrapBox"
+    box.Adornee = trap
+    box.AlwaysOnTop = true
+    box.ZIndex = 5
+    box.Size = trap:IsA("Model") and (trap:GetExtentsSize() + Vector3.new(0.2, 0.2, 0.2)) or (trap.Size + Vector3.new(0.2, 0.2, 0.2))
+    box.Color3 = C.Trap
+    box.Transparency = 0.5
+    box.Parent = TE.folder
+
+    if trap:IsA("BasePart") then trap.Transparency = 0 end
+end
+
+local function teScan()
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if teIsTrap(d) then teAdd(d) end
+    end
+end
+
+local function teEnable()
+    if TE.enabled then return end
+    TE.enabled = true
+    TE.descendantConn = workspace.DescendantAdded:Connect(function(d)
+        if teIsTrap(d) then teAdd(d) end
+    end)
+    teScan()
+end
+
+local function teDisable()
+    if not TE.enabled then return end
+    TE.enabled = false
+    if TE.descendantConn then TE.descendantConn:Disconnect(); TE.descendantConn = nil end
+    TE.folder:ClearAllChildren()
+end
+
+--==============================================================
+-- 4) FOOTSTEP TRAILS
+--==============================================================
+local FS = {
+    enabled = false,
+    heartbeatConn = nil,
+    prints = {},
+    last = setmetatable({}, { __mode = "k" }),
+    side = setmetatable({}, { __mode = "k" }),
+    folder = nil,
+    LIFE = 8,
+    AT = 0,
+    RAY = RaycastParams.new(),
+}
+FS.RAY.FilterType = Enum.RaycastFilterType.Exclude
+
+local function fsTint(role)
+    if role == "Murderer" then return C.Murderer end
+    if role == "Sheriff" then return C.Sheriff end
+    return C.Innocent
+end
+
+local function fsClear()
+    for i = #FS.prints, 1, -1 do
+        local e = FS.prints[i]
+        pcall(function() e.part:Destroy() end)
+        if e.toe then pcall(function() e.toe:Destroy() end) end
+        FS.prints[i] = nil
+    end
+    table.clear(FS.last); table.clear(FS.side)
+    if FS.folder then pcall(function() FS.folder:Destroy() end); FS.folder = nil end
+end
+
+local function fsDrop(cf, col)
+    if #FS.prints >= 220 then
+        local old = table.remove(FS.prints, 1)
+        if old then
+            pcall(function() old.part:Destroy() end)
+            if old.toe then pcall(function() old.toe:Destroy() end) end
+        end
+    end
+    if not (FS.folder and FS.folder.Parent) then
+        FS.folder = Instance.new("Folder")
+        FS.folder.Name = "AirFlowFootsteps"
+        FS.folder.Parent = workspace
+    end
+    local part = Instance.new("Part")
+    part.Anchored = true; part.CanCollide = false
+    part.CanQuery = false; part.CanTouch = false; part.CastShadow = false
+    part.Size = Vector3.new(0.4, 0.07, 0.66)
+    part.Material = Enum.Material.Neon
+    part.Color = col; part.Transparency = 0.15
+    part.CFrame = cf; part.Parent = FS.folder
+    local sm = Instance.new("SpecialMesh", part); sm.MeshType = Enum.MeshType.Sphere
+
+    local toe = Instance.new("Part")
+    toe.Anchored = true; toe.CanCollide = false
+    toe.CanQuery = false; toe.CanTouch = false; toe.CastShadow = false
+    toe.Size = Vector3.new(0.26, 0.06, 0.2)
+    toe.Material = Enum.Material.Neon
+    toe.Color = col; toe.Transparency = 0.15
+    toe.CFrame = cf * CFrame.new(0, 0, -0.46)
+    toe.Parent = FS.folder
+    local sm2 = Instance.new("SpecialMesh", toe); sm2.MeshType = Enum.MeshType.Sphere
+
+    FS.prints[#FS.prints + 1] = { part = part, toe = toe, born = os.clock() }
+end
+
+local function fsHeartbeat()
+    local now = os.clock()
+    for i = #FS.prints, 1, -1 do
+        local e = FS.prints[i]
+        local age = now - e.born
+        if age >= FS.LIFE or not e.part.Parent then
+            pcall(function() e.part:Destroy() end)
+            if e.toe then pcall(function() e.toe:Destroy() end) end
+            table.remove(FS.prints, i)
+        else
+            local t = 0.15 + 0.85 * (age / FS.LIFE)
+            e.part.Transparency = t
+            if e.toe then e.toe.Transparency = t end
+        end
+    end
+    if now - FS.AT < 0.08 then return end
+    FS.AT = now
+
+    local me = game.Players.LocalPlayer.Character
+    local murderer = getMurderer()
+    local sheriff = getSheriff()
+
+    for _, plr in ipairs(game.Players:GetPlayers()) do
+        if plr ~= game.Players.LocalPlayer and plr.Character then
+            local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+            local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+            if hrp and hum and hum.Health > 0 then
+                local pos = hrp.Position
+                local prev = FS.last[plr]
+                if not prev then
+                    FS.last[plr] = pos
+                elseif (pos - prev).Magnitude >= 3.5 then
+                    FS.last[plr] = pos
+                    FS.RAY.FilterDescendantsInstances = { plr.Character, me, FS.folder }
+                    local hit = workspace:Raycast(pos, Vector3.new(0, -8, 0), FS.RAY)
+                    if hit then
+                        local n = hit.Normal
+                        local travel = pos - prev
+                        local look = (travel.Magnitude > 0.5) and travel.Unit or hrp.CFrame.LookVector
+                        local fwd = look - n * look:Dot(n)
+                        fwd = (fwd.Magnitude > 1e-3) and fwd.Unit or Vector3.new(0, 0, -1)
+                        local sideVec = fwd:Cross(n)
+                        FS.side[plr] = not FS.side[plr]
+                        local base = hit.Position + sideVec * (FS.side[plr] and 0.3 or -0.3) + n * 0.045
+                        local role = (plr == murderer) and "Murderer" or ((plr == sheriff) and "Sheriff" or "Innocent")
+                        fsDrop(CFrame.lookAt(base, base + fwd, n), fsTint(role))
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function fsEnable()
+    if FS.enabled then return end
+    FS.enabled = true
+    acquireRoles()
+    FS.heartbeatConn = game:GetService("RunService").Heartbeat:Connect(fsHeartbeat)
+end
+
+local function fsDisable()
+    if not FS.enabled then return end
+    FS.enabled = false
+    if FS.heartbeatConn then FS.heartbeatConn:Disconnect(); FS.heartbeatConn = nil end
+    releaseRoles()
+    fsClear()
+end
+
+--==============================================================
+-- Theme listener (kept alive across refreshes)
+--==============================================================
+local function onThemeChanged()
+    if not GE.enabled then return end
+    if not GE.hlFolder or not GE.hlFolder.Parent then return end
+    local accent = getAccentColor()
+    for _, hl in ipairs(GE.hlFolder:GetChildren()) do
+        if hl.Name == "GunHL" then hl.OutlineColor = accent end
+    end
+    for _, bb in pairs(GE.labelStore) do
+        if bb and bb.Parent then
+            local nameLbl = bb:FindFirstChild("NameLbl", true)
+            local distLbl = bb:FindFirstChild("DistLbl", true)
+            local stroke = bb:FindFirstChildOfClass("UIStroke")
+            if nameLbl then nameLbl.TextColor3 = accent end
+            if distLbl then distLbl.TextColor3 = accent end
+            if stroke then stroke.Color = accent end
+        end
+    end
+end
+
+--==============================================================
+-- Public API
+--==============================================================
+function API:EnableHighlight() hlEnable() end
+function API:DisableHighlight() hlDisable() end
+function API:ToggleHighlight() if HL.enabled then hlDisable() else hlEnable() end end
+function API:IsHighlightEnabled() return HL.enabled end
+
+function API:EnableGunESP() geEnable() end
+function API:DisableGunESP() geDisable() end
+function API:ToggleGunESP() if GE.enabled then geDisable() else geEnable() end end
+function API:IsGunESPEnabled() return GE.enabled end
+
+function API:EnableTrapESP() teEnable() end
+function API:DisableTrapESP() teDisable() end
+function API:ToggleTrapESP() if TE.enabled then teDisable() else teEnable() end end
+function API:IsTrapESPEnabled() return TE.enabled end
+
+function API:EnableFootsteps() fsEnable() end
+function API:DisableFootsteps() fsDisable() end
+function API:ToggleFootsteps() if FS.enabled then fsDisable() else fsEnable() end end
+function API:IsFootstepsEnabled() return FS.enabled end
+
+function API:EnableAll()
+    hlEnable(); geEnable(); teEnable(); fsEnable()
+end
+
+function API:DisableAll()
+    hlDisable(); geDisable(); teDisable(); fsDisable()
+end
+
+--==============================================================
+-- ROUND REFRESH
+--==============================================================
+local _destroyed = false
+local _refreshing = false
+
+-- Wipes everything DisableAll leaves behind:
+--  - per-player state for players who already left the game
+--  - stale role cache
+--  - leftover folders (defensive; hl/ge/te/fs already clear on disable)
+local function cleanupAllLeftovers()
+    -- HL: any per-player chams/state from players no longer in GetPlayers()
+    for player, parts in pairs(HL.playerChamsParts) do
+        if type(parts) == "table" then
+            for _, part in ipairs(parts) do
+                pcall(function() if part and part.Parent then part:Destroy() end end)
+            end
+        end
+    end
+    HL.playerChamsParts = {}
+    HL.playerOriginalData = {}
+    HL.playerHiddenClothes = {}
+    HL.playerRoles = {}
+    HL.playerCharRefs = {}
+    HL.charConns = {}
+    pcall(function() HL.folder:ClearAllChildren() end)
+
+    -- GE
+    GE.labelStore = {}
+    GE.ownerData = {}
+    GE.recentDeaths = {}
+    GE.charConns = {}
+    pcall(function() GE.hlFolder:ClearAllChildren() end)
+    pcall(function() GE.tagFolder:ClearAllChildren() end)
+
+    -- TE
+    pcall(function() TE.folder:ClearAllChildren() end)
+
+    -- FS
+    if FS.folder then pcall(function() FS.folder:Destroy() end); FS.folder = nil end
+    FS.prints = {}
+    FS.last = setmetatable({}, { __mode = "k" })
+    FS.side = setmetatable({}, { __mode = "k" })
+
+    -- Role cache drift
+    table.clear(roleCache)
+end
+
+local function refreshESP(reason)
+    if _destroyed then return end
+    if _refreshing then return end
+    _refreshing = true
+
+    -- Snapshot which features were ON so we can restore them after
+    local snap = {
+        Highlight = HL.enabled,
+        GunESP    = GE.enabled,
+        TrapESP   = TE.enabled,
+        Footsteps = FS.enabled,
+    }
+
+    -- Full teardown
+    API:DisableAll()
+    cleanupAllLeftovers()
+
+    -- Let stale RenderStepped / Heartbeat / DescendantAdded conns die fully
+    -- before we re-attach. This is what actually fixes the "ESP starts
+    -- detecting things it shouldn't" drift over long sessions.
+    task.wait(0.25)
+
+    if _destroyed then _refreshing = false; return end
+
+    -- Re-apply the previous state on a clean slate
+    if snap.Highlight then pcall(function() API:EnableHighlight() end) end
+    if snap.GunESP    then pcall(function() API:EnableGunESP()    end) end
+    if snap.TrapESP   then pcall(function() API:EnableTrapESP()   end) end
+    if snap.Footsteps then pcall(function() API:EnableFootsteps() end) end
+
+    print("[ESP] Round refresh complete: " .. tostring(reason))
+    _refreshing = false
+end
+
+function API:Refresh(reason)
+    task.spawn(refreshESP, reason or "manual")
+end
+
+--==============================================================
+-- AUTO ROUND-REFRESH (LocalPlayer respawn == new round)
+--==============================================================
+local _lastRespawn = 0
+local _respawnConn = nil
+
+local function onLocalRespawn()
+    local now = os.clock()
+    if now - _lastRespawn < 3 then return end -- debounce
+    _lastRespawn = now
+    -- Small delay so role remotes / character replication settle
+    -- before we start scanning for Murderer / Sheriff / traps / guns.
+    task.delay(2, function()
+        if not _destroyed then
+            refreshESP("round start")
+        end
+    end)
+end
+
+pcall(function()
+    _respawnConn = game.Players.LocalPlayer.CharacterAdded:Connect(onLocalRespawn)
+end)
+
+--==============================================================
+-- Destroy (full teardown — removes theme listener + respawn conn)
+--==============================================================
+function API:Destroy()
+    _destroyed = true
+    if _respawnConn then
+        pcall(function() _respawnConn:Disconnect() end)
+        _respawnConn = nil
+    end
+    API:DisableAll()
+    cleanupAllLeftovers()
+    pcall(function() HL.folder:Destroy() end)
+    pcall(function() GE.hlFolder:Destroy() end)
+    pcall(function() GE.tagFolder:Destroy() end)
+    pcall(function() TE.folder:Destroy() end)
+    -- Remove our theme listener so a subsequent reload of this module
+    -- doesn't accumulate duplicate listeners on Library._themeListeners.
+    local lib = getgenv().Library
+    if lib and lib._themeListeners then
+        for i = #lib._themeListeners, 1, -1 do
+            if lib._themeListeners[i] == onThemeChanged then
+                table.remove(lib._themeListeners, i)
+            end
+        end
+    end
+end
+
+--==============================================================
+-- Hook into Library theme listeners
+--==============================================================
+local lib = getgenv().Library
+if lib and lib._themeListeners then
+    table.insert(lib._themeListeners, onThemeChanged)
+end
+
+return API
